@@ -1,69 +1,211 @@
-import Image from "next/image";
+"use client";
+
+import { useRef, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+    const [recording, setRecording] = useState(false);
+    const [videoURL, setVideoURL] = useState<string | null>(null);
+    const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
+    const [uploading, setUploading] = useState(false);
+
+    // Participant token
+    const [token, setToken] = useState("");
+
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const chunksRef = useRef<Blob[]>([]);
+
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: true,
+            });
+
+            // Show live camera
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+            }
+
+            const recorder = new MediaRecorder(stream);
+
+            mediaRecorderRef.current = recorder;
+            chunksRef.current = [];
+
+            recorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    chunksRef.current.push(event.data);
+                }
+            };
+
+            recorder.onstop = () => {
+                const blob = new Blob(chunksRef.current, {
+                    type: "video/webm",
+                });
+
+                setVideoBlob(blob);
+
+                const url = URL.createObjectURL(blob);
+                setVideoURL(url);
+
+                // Stop camera and microphone
+                stream.getTracks().forEach((track) => track.stop());
+
+                // Remove live camera
+                if (videoRef.current) {
+                    videoRef.current.srcObject = null;
+                }
+            };
+
+            recorder.start();
+            setRecording(true);
+
+        } catch (error) {
+            console.error("Camera/microphone error:", error);
+        }
+    };
+
+    const stopRecording = () => {
+        mediaRecorderRef.current?.stop();
+        setRecording(false);
+    };
+
+    const publishStory = async () => {
+        if (!videoBlob) {
+            alert("No video to upload.");
+            return;
+        }
+
+        // Temporary token check
+        if (!token.trim()) {
+            alert("Please enter your participant token.");
+            return;
+        }
+
+        try {
+            setUploading(true);
+
+            const fileName = `story-${Date.now()}.webm`;
+
+            console.log("Uploading:", fileName);
+            console.log("Participant token:", token);
+
+            const { data, error } = await supabase.storage
+                .from("stories")
+                .upload(fileName, videoBlob, {
+                    contentType: "video/webm",
+                    upsert: false,
+                });
+
+            if (error) {
+                console.error("Upload error:", error);
+                alert(`Upload failed: ${error.message}`);
+                return;
+            }
+
+            console.log("Upload successful:", data);
+
+            // Get public URL
+            const { data: publicURL } = supabase.storage
+                .from("stories")
+                .getPublicUrl(fileName);
+
+            console.log("Video URL:", publicURL.publicUrl);
+
+            alert("Your story has been published!");
+
+        } catch (error) {
+            console.error("Something went wrong:", error);
+            alert("Something went wrong while uploading.");
+
+        } finally {
+            setUploading(false);
+        }
+    };
+
+    return (
+        <div className="flex flex-col items-center gap-4 p-8">
+
+            {/* PARTICIPANT TOKEN */}
+            {!recording && !videoURL && (
+                <div className="flex w-full max-w-lg flex-col gap-2">
+                    <label
+                        htmlFor="token"
+                        className="text-sm font-medium text-gray-700"
+                    >
+                        Participant Token
+                    </label>
+
+                    <input
+                        id="token"
+                        type="text"
+                        value={token}
+                        onChange={(e) => setToken(e.target.value)}
+                        placeholder="Enter your participant token"
+                        className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                    />
+                </div>
+            )}
+
+            {/* LIVE CAMERA */}
+            <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                className={`w-full max-w-lg rounded-lg ${
+                    recording ? "block" : "hidden"
+                }`}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+            {/* RECORD BUTTON */}
+            {!recording ? (
+                <button
+                    type="button"
+                    onClick={startRecording}
+                    className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-700"
+                >
+                    🎥 Record Your Story
+                </button>
+            ) : (
+                <button
+                    type="button"
+                    onClick={stopRecording}
+                    className="rounded-lg bg-red-600 px-6 py-3 font-medium text-white hover:bg-red-700"
+                >
+                    ⏹ Stop Recording
+                </button>
+            )}
+
+            {/* RECORDED VIDEO */}
+            {videoURL && (
+                <div className="mt-6 flex w-full max-w-lg flex-col gap-4">
+
+                    <h2 className="text-lg font-semibold">
+                        Your Story
+                    </h2>
+
+                    <video
+                        src={videoURL}
+                        controls
+                        className="w-full rounded-lg"
+                    />
+
+                    {/* PUBLISH */}
+                    <button
+                        type="button"
+                        onClick={publishStory}
+                        disabled={uploading}
+                        className="rounded-lg bg-green-600 px-6 py-3 font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {uploading
+                            ? "Uploading..."
+                            : "🚀 Publish Story"}
+                    </button>
+
+                </div>
+            )}
         </div>
-      </main>
-    </div>
-  );
+    );
 }
